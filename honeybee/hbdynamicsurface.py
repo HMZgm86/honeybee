@@ -3,7 +3,7 @@ from hbsurface import HBSurface
 
 
 class HBDynamicSurface(HBSurface):
-    """Base class for Honeybee surface.
+    """Honeybee dynamic surface.
 
     Attributes:
         name: A unique string for surface name

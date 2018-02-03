@@ -30,37 +30,24 @@ class AnalysisGrid(object):
         analysis_points: A collection of analysis points.
     """
 
-    __slots__ = ('_analysis_points', '_name', '_sources', '_wgroups', '_directFiles',
-                 '_totalFiles')
+    __slots__ = ('_analysis_points', '_name', '_wgroups', '_database')
 
     def __init__(self, analysis_points, name=None, window_groups=None):
         """Initialize a AnalysisPointGroup.
 
-        analysis_points: A collection of AnalysisPoints.
-        name: A unique name for this AnalysisGrid.
-        window_groups: A collection of window_groups which contribute to this grid.
-            This input is only meaningful in studies such as daylight coefficient
-            and multi-phase studies that the contribution of each source will be
-            calculated separately (default: None).
+        Args:
+            analysis_points: A collection of AnalysisPoints.
+            name: A unique name for this AnalysisGrid.
+            window_groups: A collection of window-groups associated to this analysis
+                grid. In case it is left empty all the window goups will be assigned
+                to every analysis grid once a recipe is created.
         """
         self.name = name
-        # name of sources and their state. It's only meaningful in multi-phase daylight
-        # analysis. In analysis for a single time it will be {None: [None]}
-        self._sources = OrderedDict()
+        self.window_groups = window_groups
+        self.analysis_points = analysis_points
+        self._database = None
 
-        if window_groups:
-            self._wgroups = tuple(wg.name for wg in window_groups)
-        else:
-            self._wgroups = ()
-
-        for ap in analysis_points:
-            assert hasattr(ap, '_dir'), \
-                '{} is not an AnalysisPoint.'.format(ap)
-
-        self._analysis_points = analysis_points
-        self._directFiles = []  # list of results files
-        self._totalFiles = []  # list of results files
-
+    # TODO: Add window groups and name
     @classmethod
     def from_json(cls, ag_json):
         """Create an analysis grid from json objects."""
@@ -77,6 +64,10 @@ class AnalysisGrid(object):
             points: A flatten list of (x, y ,z) points.
             vectors: An optional list of (x, y, z) for direction of test points.
                 If not provided a (0, 0, 1) vector will be assigned.
+            name: A unique name for this AnalysisGrid.
+            window_groups: A collection of window-groups associated to this analysis
+                grid. In case it is left empty all the window goups will be assigned
+                to every analysis grid once a recipe is created.
         """
         vectors = vectors or ()
         points, vectors = match_data(points, vectors, (0, 0, 1))
@@ -84,18 +75,26 @@ class AnalysisGrid(object):
         return cls(aps, name, window_groups)
 
     @classmethod
-    def from_file(cls, file_path):
+    def from_file(cls, file_path, name=None, window_groups=None):
         """Create an analysis grid from a pts file.
 
+        The file should have 6 values in each line indicating location and direction
+        of each test point.
+
         Args:
-            file_path: Full path to points file
+            file_path: Full path to points file.
+            name: A unique name for this AnalysisGrid.
+            window_groups: A collection of window-groups associated to this analysis
+                grid. In case it is left empty all the window goups will be assigned
+                to every analysis grid once a recipe is created.
         """
         assert os.path.isfile(file_path), IOError("Can't find {}.".format(file_path))
         ap = AnalysisPoint  # load analysis point locally for better performance
         with open(file_path, 'rb') as inf:
             points = tuple(ap.from_raw_values(*l.split()) for l in inf)
-
-        return cls(points)
+        if not name:
+            name = os.path.split(file_path)[-1][:-4]
+        return cls(points, name, window_groups)
 
     @property
     def isAnalysisGrid(self):
@@ -118,7 +117,26 @@ class AnalysisGrid(object):
 
     @window_groups.setter
     def window_groups(self, wgs):
-        self._wgroups = tuple(wg.name for wg in wgs)
+        if not wgs:
+            wgs = ()
+        for wg in wgs:
+            assert hasattr(wg, 'isWindowGroup'), \
+                'Expected WindowGroup not {}.'.format(type(wg))
+        self._wgroups = wgs
+
+    @property
+    def analysis_points(self):
+        """Return a list of analysis points."""
+        return self._analysis_points
+
+    @analysis_points.setter
+    def analysis_points(self, aps):
+        """Set list of analysis points."""
+        for count, ap in enumerate(aps):
+            assert hasattr(ap, '_loc'), \
+                '{} is not an AnalysisPoint.'.format(type(ap))
+            ap.grid = self  # set grid for analysis point
+            ap.id = count
 
     @property
     def points(self):
@@ -131,25 +149,13 @@ class AnalysisGrid(object):
         return (ap.direction for ap in self._analysis_points)
 
     @property
-    def analysis_points(self):
-        """Return a list of analysis points."""
-        return self._analysis_points
-
-    @property
-    def sources(self):
-        """Get sorted list fo sources."""
-        if not self._sources:
-            return self.analysis_points[0].sources
-        else:
-            srcs = range(len(self._sources))
-            for name, d in self._sources.iteritems():
-                srcs[d['id']] = name
-                return srcs
-
-    @property
     def has_values(self):
-        """Check if this analysis grid has result values."""
-        return self.analysis_points[0].has_values
+        """Check if this analysis grid has values associated to analysis grid."""
+        # this should be more sophisticated since the database might be set but the
+        # results are not neccessary loaded in database.
+        if not self._database:
+            return False
+        return self._database.has_values
 
     @property
     def has_direct_values(self):
@@ -173,6 +179,20 @@ class AnalysisGrid(object):
     def result_files(self):
         """Return result files as a list [[total files], [direct files]]."""
         return self._totalFiles, self._directFiles
+
+    def renumber_sensors(self, start_from):
+        """Renumber analysis points in this grid.
+
+        Args:
+            start_from: An integer id for the first point in this AnalysisGrid.
+
+        Returns:
+            An integer which indicates the id for the last point in this AnalysisGrid.
+        """
+        for count, point in enumerate(self.analysis_points):
+            point.id = start_from + count
+        print('Renumbered points from {} to {}'.format(start_from, start_from + count))
+        return start_from + count
 
     def add_result_files(self, file_path, hoys, start_line=None, is_direct=False,
                          header=True, mode=0):
@@ -777,7 +797,6 @@ class AnalysisGrid(object):
         """Duplicate AnalysisGrid."""
         aps = tuple(ap.duplicate() for ap in self._analysis_points)
         dup = AnalysisGrid(aps, self._name)
-        dup._sources = aps[0]._sources
         dup._wgroups = self._wgroups
         return dup
 
@@ -806,18 +825,18 @@ class AnalysisGrid(object):
             ValueError('Two analysis grid must have the same hoys.')
 
         if not self.has_values:
-            sources = self._sources.update(other._sources)
+            sources = self._wgroups.update(other._sources)
         else:
-            assert self._sources == other._sources, \
+            assert self._wgroups == other._sources, \
                 ValueError(
                     'Two analysis grid with values must have the same window_groups.'
                 )
-            sources = self._sources
+            sources = self._wgroups
 
         points = self.analysis_points + other.analysis_points
         name = '{}+{}'.format(self.name, other.name)
         addition = AnalysisGrid(points, name)
-        addition._sources = sources
+        addition._wgroups = sources
 
         return addition
 

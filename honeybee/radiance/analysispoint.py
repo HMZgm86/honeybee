@@ -2,7 +2,6 @@
 from __future__ import division
 from ..vectormath.euclid import Point3, Vector3
 from ..schedule import Schedule
-from collections import defaultdict, OrderedDict
 from itertools import izip
 import types
 import copy
@@ -15,71 +14,29 @@ class AnalysisPoint(object):
     Attributes:
         location: Location of analysis points as (x, y, z).
         direction: Direction of analysis point as (x, y, z).
-
-    This class is developed to enable honeybee for running daylight control
-    studies with dynamic shadings without going back to several files.
-
-    Each AnalysisPoint can load annual total and direct results for every state of
-    each source assigned to it. As a result once can end up with a lot of data for
-    a single point (8760 * sources * states for each source). The data are sorted as
-    integers and in different lists for each source. There are several methods to
-    set or get the data but if you're interested in more details read the comments
-    under __init__ to know how the data is stored.
-
-    In this class:
-     - Id stands for 'the id of a blind state'. Each state has a name and an ID will
-       be assigned to it based on the order of loading.
-     - coupledValue stands for a tuple of  (total, direct) values. If one the values is
-       not available it will be set to None.
-
     """
 
-    __slots__ = ('_loc', '_dir', '_sources', '_values', '_is_directLoaded', 'logic')
+    __slots__ = ('_loc', '_dir', '_id', '_grid')
 
     def __init__(self, location, direction):
         """Create an analysis point."""
         self.location = location
         self.direction = direction
+        self._id = None
+        self._grid = None
 
-        # name of sources and their state. It's only meaningful in multi-phase daylight
-        # analysis. In analysis for a single time it will be {None: [None]}
-        # It is set inside _create_data_structure method on setting values.
-        self._sources = OrderedDict()
-
-        # an empty list for values
-        # for each source there will be a new list
-        # inside each source list there will be a dictionary for each state
-        # in each dictionary the key is the hoy and the values are a list which
-        # is [total, direct]. If the value is not available it will be None
-        self._values = []
-        self._is_directLoaded = False
-        self.logic = self._logic
-
-    # TODO(mostapha): Restructure analysis points and write a class to keep track of
-    # results.
-    # Note to self! This is a hack!
-    # assume it's only a single source
     @classmethod
     def from_json(cls, ap_json):
         """Create an analysis point from json object.
-            {"location": [x, y, z], "direction": [x, y, z]}
+            {"location": {x: x, y: y, z: z},
+            "direction": {x: x, y: y, z: z}}
         """
-        _cls = cls(ap_json['location'], ap_json['direction'])
-        if 'values' in ap_json:
-            sid, stateid = _cls._create_data_structure(None, None)
-            values = []
-            hoys = []
-            try:
-                state_res = ap_json['values'][0]
-            except IndexError:
-                state_res = []
-            for item in state_res:
-                for k, v in item.iteritems():
-                    values.append(v)
-                    hoys.append(float(k))
-            # set the values
-            _cls.set_coupled_values(values, hoys, source=None, state=None)
-        return _cls
+        location = (ap_json['location']['x'],
+                    ap_json['location']['y'], ap_json['location']['z'])
+        direction = (ap_json['direction']['x'],
+                     ap_json['direction']['y'], ap_json['direction']['z'])
+
+        return cls(location, direction)
 
     @classmethod
     def from_raw_values(cls, x, y, z, x1, y1, z1):
@@ -128,47 +85,40 @@ class AnalysisPoint(object):
                     .format(direction, e))
 
     @property
-    def sources(self):
-        """Get sorted list of light sources.
+    def grid(self):
+        """The AnalysisGrid that this point belongs to."""
+        return self._grid
 
-        In most of the cases light sources are window groups.
-        """
-        srcs = range(len(self._sources))
-        for name, d in self._sources.iteritems():
-            srcs[d['id']] = name
-        return srcs
+    @grid.setter
+    def grid(self, g):
+        """Set AnalysisGrid."""
+        assert hasattr('isAnalysisGrid', g), \
+            'Expected AnalysisGrid not {}'.format(type(g))
+        self._grid = g
 
     @property
-    def details(self):
-        """Human readable details."""
-        header = 'Location: {}\nDirection: {}\n#hours: {}\n#window groups: {}\n'.format(
-            ', '.join(str(c) for c in self.location),
-            ', '.join(str(c) for c in self.direction),
-            len(self.hoys), len(self._sources)
-        )
-        sep = '-' * 15
-        wg = '\nWindow Group {}: {}\n'
-        st = '....State {}: {}\n'
+    def sources(self):
+        """Get sorted list of light sources."""
+        assert self._grid, \
+            'Sources will only be available once this point is pat of an AnalysisGrid.'
+        return self.grid.sources
 
-        # sort sources based on ids
-        sources = range(len(self._sources))
-        for s, d in self._sources.iteritems():
-            sources[d['id']] = (s, d)
+    @property
+    def db_file(self):
+        """Get path to database file.
 
-        # create the string for eacj window groups
-        notes = [header, sep]
-        for count, s in enumerate(sources):
-            name, states = s
-            notes.append(wg.format(count, name))
-            for count, name in enumerate(states['state']):
-                notes.append(st.format(count, name))
-
-        return ''.join(notes)
+        The file will be available if this point is part of an AnalysisGrid.
+        """
+        assert self._grid, \
+            'Sources will only be available once this point is pat of an AnalysisGrid.'
+        return self.grid.db_file
 
     @property
     def has_values(self):
         """Check if this point has results values."""
-        return len(self._values) != 0
+        if not self.grid:
+            return False
+        return self.grid.has_values
 
     @property
     def has_direct_values(self):
@@ -176,15 +126,16 @@ class AnalysisPoint(object):
 
         In some cases and based on the recipe only total values are available.
         """
-        return self._is_directLoaded
+        if not self.grid:
+            return False
+        return self.grid.has_direct_values
 
     @property
     def hoys(self):
         """Return hours of the year for results if any."""
-        if not self.has_values:
-            return []
-        else:
-            return sorted(self._values[0][0].keys())
+        if not self.grid:
+            return False
+        return self.grid.hoys
 
     @staticmethod
     def _logic(*args, **kwargs):
@@ -229,39 +180,6 @@ class AnalysisPoint(object):
 
         return tuple(tuple(min(s, i) for s in states)
                      for i in range(max(states) + 1))
-
-    def _create_data_structure(self, source, state):
-        """Create place holders for sources and states if needed.
-
-        Returns:
-            source id and state id as a tuple.
-        """
-        def double():
-            return [None, None]
-
-        current_sources = self._sources.keys()
-        if source not in current_sources:
-            self._sources[source] = {
-                'id': len(current_sources),
-                'state': []
-            }
-
-            # append a new list to values for the new source
-            self._values.append([])
-
-        # find the id for source and state
-        sid = self._sources[source]['id']
-
-        if state not in self._sources[source]['state']:
-            # add sources
-            self._sources[source]['state'].append(state)
-            # append a new dictionary for this state
-            self._values[sid].append(defaultdict(double))
-
-        # find the state id
-        stateid = self._sources[source]['state'].index(state)
-
-        return sid, stateid
 
     def set_value(self, value, hoy, source=None, state=None, is_direct=False):
         """Set value for a specific hour of the year.
@@ -389,7 +307,7 @@ class AnalysisPoint(object):
         sid = self.source_id(source)
         # find the state id
         stateid = self.blind_state_id(source, state)
-
+        # SELECT tot FROM FinalResults WHERE sensor_id=0 AND source_id=0 AND state_id=0 AND hoy=12;
         if hoy not in self._values[sid][stateid]:
             raise ValueError('Hourly values are not available for {}.'
                              .format(dt.DateTime.fromHoy(hoy)))
@@ -401,7 +319,7 @@ class AnalysisPoint(object):
         sid = self.source_id(source)
         # find the state id
         stateid = self.blind_state_id(source, state)
-
+        # SELECT sun FROM FinalResults WHERE sensor_id=0 AND source_id=0 AND state_id=0 AND hoy=12;
         if hoy not in self._values[sid][stateid]:
             raise ValueError('Hourly values are not available for {}.'
                              .format(dt.DateTime.fromHoy(hoy)))
@@ -415,6 +333,8 @@ class AnalysisPoint(object):
         stateid = self.blind_state_id(source, state)
 
         hoys = hoys or self.hoys
+        # generate the tuple for cases and executemany
+        # SELECT tot FROM FinalResults WHERE sensor_id=0 AND source_id=0 AND state_id=0 AND hoy=12;
         for hoy in hoys:
             if hoy not in self._values[sid][stateid]:
                 raise ValueError('Hourly values are not available for {}.'
@@ -428,8 +348,8 @@ class AnalysisPoint(object):
         sid = self.source_id(source)
         # find the state id
         stateid = self.blind_state_id(source, state)
-
         hoys = hoys or self.hoys
+        # SELECT sun FROM FinalResults WHERE sensor_id=0 AND source_id=0 AND state_id=0 AND hoy IN ({});
 
         for hoy in hoys:
             if hoy not in self._values[sid][stateid]:
@@ -443,6 +363,7 @@ class AnalysisPoint(object):
         sid = self.source_id(source)
         # find the state id
         stateid = self.blind_state_id(source, state)
+        # SELECT tot, sun FROM FinalResults WHERE sensor_id=0 AND source_id=0 AND state_id=0 AND hoy=12;
 
         if hoy not in self._values[sid][stateid]:
             raise ValueError('Hourly values are not available for {}.'
@@ -625,7 +546,7 @@ class AnalysisPoint(object):
                 you want a source to be removed set the state to -1.
 
         Returns:
-            Return a tuple for sum of (total, direct) values.
+            Return a tuple for max of (total, direct) values.
         """
         values = tuple(self.combined_values_by_id(hoys, blinds_state_ids))
 
@@ -909,22 +830,9 @@ class AnalysisPoint(object):
 
         return combs
 
-    def unload(self):
-        """Unload values and sources."""
-        self._values = []
-        self._sources = OrderedDict()
-
     def duplicate(self):
         """Duplicate the analysis point."""
         ap = AnalysisPoint(self._loc, self._dir)
-        # This should be good enough as most of the time an analysis point will be
-        # copied with no values assigned.
-        ap._values = copy.copy(self._values)
-
-        if len(ap._values) == len(self._sources):
-            ap._sources = self._sources
-
-        ap._is_directLoaded = bool(self._is_directLoaded)
         ap.logic = copy.copy(self.logic)
         return ap
 
@@ -938,11 +846,13 @@ class AnalysisPoint(object):
 
     def to_json(self):
         """Create an analysis point from json object.
-            {"location": [x, y, z], "direction": [x, y, z]}
+            {"location": {x: x, y: y, z: z}, "direction": {x: x, y: y, z: z}}
         """
-        return {"location": tuple(self.location),
-                "direction": tuple(self.direction),
-                "values": self._values}
+        return {'location': {'x': self.location[0], 'y': self.location[1],
+                             'z': self.location[2]},
+                'direction': {'x': self.direction[0], 'y': self.direction[1],
+                              'z': self.direction[2]}
+                }
 
     def __repr__(self):
         """Print an analysis point."""
