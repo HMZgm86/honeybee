@@ -8,6 +8,17 @@ import copy
 import ladybug.dt as dt
 
 
+class GridIsNotAssigned(Exception):
+    """Exception for trying to get data from and analysis point before assigning grid."""
+
+    def __init__(self, data=None):
+        data = data or 'data'
+        message = '{} will only be available once AnalysisPoint ' \
+            'is assigned to an AnalysisGrid.'.format(data.capitalize())
+
+        super(GridIsNotAssigned, self).__init__(message)
+
+
 class AnalysisPoint(object):
     """A radiance analysis point.
 
@@ -16,15 +27,17 @@ class AnalysisPoint(object):
         direction: Direction of analysis point as (x, y, z).
     """
 
-    __slots__ = ('_loc', '_dir', '_id', '_grid')
+    __slots__ = ('_loc', '_dir', '_id_local', '_id_global', '_grid')
 
     def __init__(self, location, direction):
         """Create an analysis point."""
         self.location = location
         self.direction = direction
-        self._id = None
-        self._grid = None
+        self._grid = None  # will be assigned once added to an analysis grid
+        self._id_local = None  # will be assigned once added to an analysis grid
+        self._id_global = None  # will be assigned once added to a recipe
 
+    # TODO: Add local and global id as well as grid id.
     @classmethod
     def from_json(cls, ap_json):
         """Create an analysis point from json object.
@@ -99,8 +112,8 @@ class AnalysisPoint(object):
     @property
     def sources(self):
         """Get sorted list of light sources."""
-        assert self._grid, \
-            'Sources will only be available once this point is pat of an AnalysisGrid.'
+        if not self.grid:
+            raise GridIsNotAssigned('Sources')
         return self.grid.sources
 
     @property
@@ -109,8 +122,8 @@ class AnalysisPoint(object):
 
         The file will be available if this point is part of an AnalysisGrid.
         """
-        assert self._grid, \
-            'Sources will only be available once this point is pat of an AnalysisGrid.'
+        if not self.grid:
+            raise GridIsNotAssigned('database')
         return self.grid.db_file
 
     @property
@@ -134,9 +147,10 @@ class AnalysisPoint(object):
     def hoys(self):
         """Return hours of the year for results if any."""
         if not self.grid:
-            return False
+            return []
         return self.grid.hoys
 
+    # TODO: This method needs a sample code
     @staticmethod
     def _logic(*args, **kwargs):
         """Dynamic blinds state logic.
@@ -146,14 +160,16 @@ class AnalysisPoint(object):
         """
         return args[0] > 3000
 
+    # TODO: review if really neccessary
     def source_id(self, source):
         """Get source id from source name."""
         # find the id for source and state
         try:
-            return self._sources[source]['id']
+            return self.sources[source]['id']
         except KeyError:
             raise ValueError('Invalid source input: {}'.format(source))
 
+    # TODO: review if really neccessary
     def blind_state_id(self, source, state):
         """Get state id if available."""
         try:
@@ -162,25 +178,28 @@ class AnalysisPoint(object):
             pass
 
         try:
-            return self._sources[source]['state'].index(state)
+            return self.sources[source]['state'].index(state)
         except ValueError:
             raise ValueError('Invalid state input: {}'.format(state))
 
+    # TODO: review if really neccessary
     @property
     def states(self):
         """Get list of states names for each source."""
-        return tuple(s[1]['state'] for s in self._sources.iteritems())
+        return tuple(s[1]['state'] for s in self.sources.iteritems())
 
+    # TODO: review if really neccessary
     @property
     def longest_state_ids(self):
         """Get longest combination between blind states as blinds_state_ids."""
-        states = tuple(len(s[1]['state']) - 1 for s in self._sources.iteritems())
+        states = tuple(len(s[1]['state']) - 1 for s in self.sources.iteritems())
         if not states:
             raise ValueError('This sensor is associated with no dynamic blinds.')
 
         return tuple(tuple(min(s, i) for s in states)
                      for i in range(max(states) + 1))
 
+    # TODO: rewrite to work with AnalysisGrid
     def set_value(self, value, hoy, source=None, state=None, is_direct=False):
         """Set value for a specific hour of the year.
 
@@ -192,6 +211,7 @@ class AnalysisPoint(object):
             state: State of the source if any (default: None).
             is_direct: Set to True if the value is direct contribution of sunlight.
         """
+
         if hoy is None:
             return
         sid, stateid = self._create_data_structure(source, state)
@@ -200,6 +220,7 @@ class AnalysisPoint(object):
         ind = 1 if is_direct else 0
         self._values[sid][stateid][hoy][ind] = value
 
+    # TODO: rewrite to work with AnalysisGrid
     def set_values(self, values, hoys, source=None, state=None, is_direct=False):
         """Set values for several hours of the year.
 
@@ -238,6 +259,7 @@ class AnalysisPoint(object):
                                                sid, stateid, hoy, e)
                 )
 
+    # TODO: rewrite to work with AnalysisGrid
     def set_coupled_value(self, value, hoy, source=None, state=None):
         """Set both total and direct values for a specific hour of the year.
 
@@ -266,6 +288,7 @@ class AnalysisPoint(object):
         else:
             self._is_directLoaded = True
 
+    # TODO: rewrite to work with AnalysisGrid
     def set_coupled_values(self, values, hoys, source=None, state=None):
         """Set total and direct values for several hours of the year.
 
@@ -301,6 +324,7 @@ class AnalysisPoint(object):
                 )
         self._is_directLoaded = True
 
+    # TODO: rewrite to work with AnalysisGrid
     def value(self, hoy, source=None, state=None):
         """Get total value for an hour of the year."""
         # find the id for source and state
@@ -313,6 +337,7 @@ class AnalysisPoint(object):
                              .format(dt.DateTime.fromHoy(hoy)))
         return self._values[sid][stateid][hoy][0]
 
+    # TODO: rewrite to work with AnalysisGrid
     def direct_value(self, hoy, source=None, state=None):
         """Get direct value for an hour of the year."""
         # find the id for source and state
@@ -325,6 +350,7 @@ class AnalysisPoint(object):
                              .format(dt.DateTime.fromHoy(hoy)))
         return self._values[sid][stateid][hoy][1]
 
+    # TODO: rewrite to work with AnalysisGrid
     def values(self, hoys=None, source=None, state=None):
         """Get values for several hours of the year."""
         # find the id for source and state
@@ -342,6 +368,7 @@ class AnalysisPoint(object):
 
         return tuple(self._values[sid][stateid][hoy][0] for hoy in hoys)
 
+    # TODO: rewrite to work with AnalysisGrid
     def direct_values(self, hoys=None, source=None, state=None):
         """Get direct values for several hours of the year."""
         # find the id for source and state
@@ -357,6 +384,7 @@ class AnalysisPoint(object):
                                  .format(dt.DateTime.fromHoy(hoy)))
         return tuple(self._values[sid][stateid][hoy][1] for hoy in hoys)
 
+    # TODO: rewrite to work with AnalysisGrid
     def coupled_value(self, hoy, source=None, state=None):
         """Get total and direct values for an hoy."""
         # find the id for source and state
@@ -370,6 +398,7 @@ class AnalysisPoint(object):
                              .format(dt.DateTime.fromHoy(hoy)))
         return self._values[sid][stateid][hoy]
 
+    # TODO: rewrite to work with AnalysisGrid
     def coupled_values(self, hoys=None, source=None, state=None):
         """Get total and direct values for several hours of year."""
         # find the id for source and state
@@ -386,6 +415,7 @@ class AnalysisPoint(object):
 
         return tuple(self._values[sid][stateid][hoy] for hoy in hoys)
 
+    # TODO: rewrite to work with AnalysisGrid
     def coupled_value_by_id(self, hoy, source_id=None, state_id=None):
         """Get total and direct values for an hoy."""
         # find the id for source and state
@@ -399,6 +429,7 @@ class AnalysisPoint(object):
 
         return self._values[sid][stateid][hoy]
 
+    # TODO: rewrite to work with AnalysisGrid
     def coupled_values_by_id(self, hoys=None, source_id=None, state_id=None):
         """Get total and direct values for several hours of year by source id.
 
@@ -421,6 +452,7 @@ class AnalysisPoint(object):
 
         return tuple(self._values[sid][stateid][hoy] for hoy in hoys)
 
+    # TODO: rewrite to work with AnalysisGrid
     def combined_value_by_id(self, hoy, blinds_state_ids=None):
         """Get combined value from all sources based on state_id.
 
@@ -436,11 +468,11 @@ class AnalysisPoint(object):
         direct = 0 if self._is_directLoaded else None
 
         if not blinds_state_ids:
-            blinds_state_ids = [0] * len(self._sources)
+            blinds_state_ids = [0] * len(self.sources)
 
-        assert len(self._sources) == len(blinds_state_ids), \
+        assert len(self.sources) == len(blinds_state_ids), \
             'There should be a state for each source. #sources[{}] != #states[{}]' \
-            .format(len(self._sources), len(blinds_state_ids))
+            .format(len(self.sources), len(blinds_state_ids))
 
         for sid, stateid in enumerate(blinds_state_ids):
 
@@ -462,6 +494,7 @@ class AnalysisPoint(object):
 
         return total, direct
 
+    # TODO: rewrite to work with AnalysisGrid
     def combined_values_by_id(self, hoys=None, blinds_state_ids=None):
         """Get combined value from all sources based on state_id.
 
@@ -480,7 +513,7 @@ class AnalysisPoint(object):
                 hours_count = len(hoys)
             except TypeError:
                 raise TypeError('hoys must be an iterable object: {}'.format(hoys))
-            blinds_state_ids = [[0] * len(self._sources)] * hours_count
+            blinds_state_ids = [[0] * len(self.sources)] * hours_count
 
         assert len(hoys) == len(blinds_state_ids), \
             'There should be a list of states for each hour. #states[{}] != #hours[{}]' \
@@ -510,6 +543,7 @@ class AnalysisPoint(object):
 
             yield total, direct
 
+    # TODO: rewrite to work with AnalysisGrid
     def sum_values_by_id(self, hoys=None, blinds_state_ids=None):
         """Get sum of value for all the hours.
 
@@ -537,6 +571,7 @@ class AnalysisPoint(object):
 
         return total, direct
 
+    # TODO: rewrite to work with AnalysisGrid
     def max_values_by_id(self, hoys=None, blinds_state_ids=None):
         """Get maximum value for all the hours.
 
@@ -555,6 +590,7 @@ class AnalysisPoint(object):
 
         return total, direct
 
+    # TODO: rewrite to work with AnalysisGrid
     def blinds_state(self, hoys=None, blinds_state_ids=None, *args, **kwargs):
         """Calculte blinds state based on a control logic.
 
@@ -625,6 +661,7 @@ class AnalysisPoint(object):
         blinds_state = tuple(comb_ids[ids] for ids in blinds_index)
         return blinds_state, blinds_index, ill_values, dir_values, success
 
+    # TODO: rewrite to work with AnalysisGrid
     def annual_metrics(self, da_threshhold=None, udi_min_max=None, blinds_state_ids=None,
                        occ_schedule=None):
         """Calculate annual metrics.
@@ -649,6 +686,7 @@ class AnalysisPoint(object):
         return self._calculate_annual_metrics(
             values, hours, da_threshhold, udi_min_max, blinds_state_ids, occ_schedule)
 
+    # TODO: rewrite to work with AnalysisGrid
     def useful_daylight_illuminance(self, udi_min_max=None, blinds_state_ids=None,
                                     occ_schedule=None):
         """Calculate useful daylight illuminance.
@@ -689,6 +727,7 @@ class AnalysisPoint(object):
         return 100 * udi / total_hour_count, 100 * udi_l / total_hour_count, \
             100 * udi_m / total_hour_count
 
+    # TODO: rewrite to work with AnalysisGrid
     def daylight_autonomy(self, da_threshhold=None, blinds_state_ids=None,
                           occ_schedule=None):
         """Calculate daylight autonomy and continious daylight autonomy.
@@ -724,6 +763,7 @@ class AnalysisPoint(object):
 
         return 100 * DA / total_hour_count, 100 * cda / total_hour_count
 
+    # TODO: rewrite to work with AnalysisGrid
     def annual_solar_exposure(self, threshhold=None, blinds_state_ids=None,
                               occ_schedule=None, target_hours=None):
         """Annual Solar Exposure (ASE).
@@ -753,6 +793,7 @@ class AnalysisPoint(object):
         return self._calculate_annual_solar_exposure(
             values, hoys, threshhold, blinds_state_ids, occ_schedule, target_hours)
 
+    # TODO: rewrite to work with AnalysisGrid
     @staticmethod
     def _calculate_annual_solar_exposure(
             values, hoys, threshhold=None, blinds_state_ids=None, occ_schedule=None,
@@ -771,6 +812,7 @@ class AnalysisPoint(object):
 
         return ase < target_hours, ase, problematic_hours
 
+    # TODO: rewrite to work with AnalysisGrid
     @staticmethod
     def _calculate_annual_metrics(
         values, hours, da_threshhold=None, udi_min_max=None, blinds_state_ids=None,
@@ -809,6 +851,7 @@ class AnalysisPoint(object):
             100 * udi / total_hour_count, 100 * udi_l / total_hour_count, \
             100 * udi_m / total_hour_count
 
+    # TODO: rewrite to work with AnalysisGrid
     @staticmethod
     def parse_blind_states(blinds_state_ids):
         """Parse input blind states.
@@ -830,6 +873,7 @@ class AnalysisPoint(object):
 
         return combs
 
+    # TODO: include ids
     def duplicate(self):
         """Duplicate the analysis point."""
         ap = AnalysisPoint(self._loc, self._dir)
@@ -844,6 +888,7 @@ class AnalysisPoint(object):
         """Return Radiance string for a test point."""
         return "%s %s" % (self.location, self.direction)
 
+    # TODO: include ids
     def to_json(self):
         """Create an analysis point from json object.
             {"location": {x: x, y: y, z: z}, "direction": {x: x, y: y, z: z}}

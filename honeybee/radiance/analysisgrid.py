@@ -30,7 +30,7 @@ class AnalysisGrid(object):
         analysis_points: A collection of analysis points.
     """
 
-    __slots__ = ('_analysis_points', '_name', '_wgroups', '_database')
+    __slots__ = ('_analysis_points', '_name', '_wgroups', '_database', '_id')
 
     def __init__(self, analysis_points, name=None, window_groups=None):
         """Initialize a AnalysisPointGroup.
@@ -46,6 +46,7 @@ class AnalysisGrid(object):
         self.window_groups = window_groups
         self.analysis_points = analysis_points
         self._database = None
+        self._id = None  # will be set once added to an analysis recipe
 
     # TODO: Add window groups and name
     @classmethod

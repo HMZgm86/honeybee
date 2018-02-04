@@ -251,24 +251,24 @@ class SqliteDB(object):
         #
         # add room grid to all grid table. This is just a place holder
         grid_command = """INSERT INTO Grid (id, name) VALUES (?, ?)"""
-        c.execute(grid_command, (0, 'room'))
-
-        for state_id, state in enumerate(states):
-            command = """INSERT INTO State (id, name) VALUES (?, ?);"""
-            c.execute(command, (state_id, state))
-
-        for source_id, source in enumerate(sources):
-            # add source to grid
-            command = """INSERT INTO SourceGrid (source_id, grid_id) VALUES (?, ?)"""
-            c.execute(command, (source_id, 0))
-            # add sources to tables
-            command = """INSERT INTO Source (id, name) VALUES (?, ?);"""
-            c.execute(command, (source_id, source))
-            # put sources and state together
-            for state in sources[source]:
-                state_id = states.index(state)
-                command = """INSERT INTO SourceState (source_id, state_id) VALUES (?, ?);"""
-                c.execute(command, (source_id, state_id))
+        # c.execute(grid_command, (0, 'room'))
+        #
+        # for state_id, state in enumerate(states):
+        #     command = """INSERT INTO State (id, name) VALUES (?, ?);"""
+        #     c.execute(command, (state_id, state))
+        #
+        # for source_id, source in enumerate(sources):
+        #     # add source to grid
+        #     command = """INSERT INTO SourceGrid (source_id, grid_id) VALUES (?, ?)"""
+        #     c.execute(command, (source_id, 0))
+        #     # add sources to tables
+        #     command = """INSERT INTO Source (id, name) VALUES (?, ?);"""
+        #     c.execute(command, (source_id, source))
+        #     # put sources and state together
+        #     for state in sources[source]:
+        #         state_id = states.index(state)
+        #         command = """INSERT INTO SourceState (source_id, state_id) VALUES (?, ?);"""
+        #         c.execute(command, (source_id, state_id))
 
     def add_results_place_holder(self, light_sources, hoys=None):
         """add the place holder for results which will be filled
