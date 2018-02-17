@@ -2,21 +2,11 @@
 from __future__ import division
 from ..vectormath.euclid import Point3, Vector3
 from ..schedule import Schedule
+from ..exception import GridIsNotAssignedError
 from itertools import izip
 import types
 import copy
 import ladybug.dt as dt
-
-
-class GridIsNotAssigned(Exception):
-    """Exception for trying to get data from and analysis point before assigning grid."""
-
-    def __init__(self, data=None):
-        data = data or 'data'
-        message = '{} will only be available once AnalysisPoint ' \
-            'is assigned to an AnalysisGrid.'.format(data.capitalize())
-
-        super(GridIsNotAssigned, self).__init__(message)
 
 
 class AnalysisPoint(object):
@@ -111,9 +101,9 @@ class AnalysisPoint(object):
 
     @property
     def sources(self):
-        """Get sorted list of light sources."""
+        """Get sorted list of luminious sources."""
         if not self.grid:
-            raise GridIsNotAssigned('Sources')
+            raise GridIsNotAssignedError('Sources')
         return self.grid.sources
 
     @property
@@ -123,7 +113,7 @@ class AnalysisPoint(object):
         The file will be available if this point is part of an AnalysisGrid.
         """
         if not self.grid:
-            raise GridIsNotAssigned('database')
+            raise GridIsNotAssignedError('database')
         return self.grid.db_file
 
     @property

@@ -10,7 +10,11 @@ from collections import OrderedDict
 
 
 class SqliteDB(object):
-    """Sqlite3 database for radiance based grid-based simulation."""
+    """Sqlite3 database for honeybee grid_based daylight simulation.
+
+    The database currently only supports grid-based simulation and image-based will
+    be added in the near future.
+    """
 
     project_table_schema = """CREATE TABLE IF NOT EXISTS Project (
           id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
@@ -342,3 +346,207 @@ class SqliteDB(object):
         Each line should be the results for an hour.
         """
         pass
+
+    def set_values(self, hoys, values, source=None, state=None, is_direct=False):
+
+        pass
+        # assign the values to points
+        for count, hourlyValues in enumerate(values):
+            self.analysis_points[count].set_values(
+                hourlyValues, hoys, source, state, is_direct)
+
+    def parse_header(self, inf, start_line, hoys, check_point_count=False):
+        """Parse radiance matrix header."""
+        # read the header
+        for i in xrange(10):
+            line = inf.next()
+            if line[:6] == 'FORMAT':
+                inf.next()  # pass empty line
+                break  # done with the header!
+            elif start_line == 0 and line[:5] == 'NROWS':
+                points_count = int(line.split('=')[-1])
+                if check_point_count:
+                    assert len(self._analysis_points) == points_count, \
+                        "Length of points [{}] must match the number " \
+                        "of rows [{}].".format(
+                            len(self._analysis_points), points_count)
+
+            elif start_line == 0 and line[:5] == 'NCOLS':
+                hours_count = int(line.split('=')[-1])
+                if hoys:
+                    assert hours_count == len(hoys), \
+                        "Number of hours [{}] must match the " \
+                        "number of columns [{}]." \
+                        .format(len(hoys), hours_count)
+                else:
+                    hoys = xrange(0, hours_count)
+
+        return inf, hoys
+
+    def set_values_from_file(self, file_path, hoys=None, source=None, state=None,
+                             start_line=None, is_direct=False, header=True,
+                             check_point_count=True, mode=0):
+        """Load values for test points from a file.
+
+        Args:
+            file_path: Full file path to the result file.
+            hoys: A collection of hours of the year for the results. If None the
+                default will be range(0, len(results)).
+            source: Name of the source.
+            state: Name of the state.
+            start_line: Number of start lines after the header from 0 (default: 0).
+            is_direct: A Boolean to declare if the results is direct illuminance
+                (default: False).
+            header: A Boolean to declare if the file has header (default: True).
+            mode: 0 > load the values 1 > load values as binary. Any non-zero value
+                will be 1. This is useful for studies such as sunlight hours. 2 >
+                load the values divided by mode number. Use this mode for daylight
+                factor or radiation analysis.
+        """
+
+        if os.path.getsize(file_path) < 2:
+            raise EmptyFileError(file_path)
+
+        st = start_line or 0
+
+        with open(file_path, 'rb') as inf:
+            if header:
+                inf, hoys = self.parse_header(inf, st, hoys, check_point_count)
+
+            self.add_result_files(file_path, hoys, st, is_direct, header, mode)
+
+            for i in xrange(st):
+                inf.next()
+
+            end = len(self._analysis_points)
+            if mode == 0:
+                values = (tuple(int(float(r)) for r in inf.next().split())
+                          for count in xrange(end))
+            elif mode == 1:
+                # binary 0-1
+                values = (tuple(1 if float(r) > 0 else 0 for r in inf.next().split())
+                          for count in xrange(end))
+            else:
+                # divide values by mode (useful for daylight factor calculation)
+                values = (tuple(int(float(r) / mode) for r in inf.next().split())
+                          for count in xrange(end))
+
+            # assign the values to points
+            for count, hourlyValues in enumerate(values):
+                self.analysis_points[count].set_values(
+                    hourlyValues, hoys, source, state, is_direct)
+
+    def set_coupled_values_from_file(
+            self, total_file_path, direct_file_path, hoys=None, source=None, state=None,
+            start_line=None, header=True, check_point_count=True, mode=0):
+        """Load direct and total values for test points from two files.
+
+        Args:
+            file_path: Full file path to the result file.
+            hoys: A collection of hours of the year for the results. If None the
+                default will be range(0, len(results)).
+            source: Name of the source.
+            state: Name of the state.
+            start_line: Number of start lines after the header from 0 (default: 0).
+            header: A Boolean to declare if the file has header (default: True).
+            mode: 0 > load the values 1 > load values as binary. Any non-zero value
+                will be 1. This is useful for studies such as sunlight hours. 2 >
+                load the values divided by mode number. Use this mode for daylight
+                factor or radiation analysis.
+        """
+
+        for file_path in (total_file_path, direct_file_path):
+            if os.path.getsize(file_path) < 2:
+                raise EmptyFileError(file_path)
+
+        st = start_line or 0
+
+        with open(total_file_path, 'rb') as inf, open(direct_file_path, 'rb') as dinf:
+            if header:
+                inf, hoys = self.parse_header(inf, st, hoys, check_point_count)
+                dinf, hoys = self.parse_header(dinf, st, hoys, check_point_count)
+
+            self.add_result_files(total_file_path, hoys, st, False, header, mode)
+            self.add_result_files(direct_file_path, hoys, st, True, header, mode)
+
+            for i in xrange(st):
+                inf.next()
+                dinf.next()
+
+            end = len(self._analysis_points)
+
+            if mode == 0:
+                coupled_values = (
+                    tuple((int(float(r)), int(float(d))) for r, d in
+                          izip(inf.next().split(), dinf.next().split()))
+                    for count in xrange(end))
+            elif mode == 1:
+                # binary 0-1
+                coupled_values = (tuple(
+                    (int(float(1 if float(r) > 0 else 0)),
+                     int(float(1 if float(d) > 0 else 0)))
+                    for r, d in izip(inf.next().split(), dinf.next().split()))
+                    for count in xrange(end))
+            else:
+                # divide values by mode (useful for daylight factor calculation)
+                coupled_values = (
+                    tuple((int(float(r) / mode), int(float(d) / mode)) for r, d in
+                          izip(inf.next().split(), dinf.next().split()))
+                    for count in xrange(end))
+
+            # assign the values to points
+            for count, hourlyValues in enumerate(coupled_values):
+                self.analysis_points[count].set_coupled_values(
+                    hourlyValues, hoys, source, state)
+
+    def load_values_from_files(self):
+        """Load grid values from self.result_files."""
+        # remove old results
+        for ap in self._analysis_points:
+            ap._sources = OrderedDict()
+            ap._values = []
+        r_files = self.result_files[0][:]
+        d_files = self.result_files[1][:]
+        self._totalFiles = []
+        self._directFiles = []
+        # pass
+        if r_files and d_files:
+            # both results are available
+            for rf, df in izip(r_files, d_files):
+                rfPath, hoys, start_line, header, mode = rf
+                dfPath, hoys, start_line, header, mode = df
+                fn = os.path.split(rfPath)[-1][:-4].split("..")
+                source = fn[-2]
+                state = fn[-1]
+                print(
+                    '\nloading total and direct results for {} AnalysisGrid'
+                    ' from {}::{}\n{}\n{}\n'.format(
+                        self.name, source, state, rfPath, dfPath))
+                self.set_coupled_values_from_file(
+                    rfPath, dfPath, hoys, source, state, start_line, header,
+                    False, mode
+                )
+        elif r_files:
+            for rf in r_files:
+                rfPath, hoys, start_line, header, mode = rf
+                fn = os.path.split(rfPath)[-1][:-4].split("..")
+                source = fn[-2]
+                state = fn[-1]
+                print('\nloading the results for {} AnalysisGrid form {}::{}\n{}\n'
+                      .format(self.name, source, state, rfPath))
+                self.set_values_from_file(
+                    rf, hoys, source, state, start_line, is_direct=False,
+                    header=header, check_point_count=False, mode=mode
+                )
+        elif d_files:
+            for rf in d_files:
+                rfPath, hoys, start_line, header, mode = rf
+                fn = os.path.split(rfPath)[-1][:-4].split("..")
+                source = fn[-2]
+                state = fn[-1]
+                print('\nloading the results for {} AnalysisGrid form {}::{}\n{}\n'
+                      .format(self.name, source, state, rfPath))
+                self.set_values_from_file(
+                    rf, hoys, source, state, start_line, is_direct=True,
+                    header=header, check_point_count=False, mode=mode
+                )
