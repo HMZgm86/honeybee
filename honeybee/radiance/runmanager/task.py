@@ -158,7 +158,10 @@ class Task(object):
 class SubTask(object):
 
     def __init__(self, title, command, output_file=None, expected_output_size=None):
-        """Task
+        """SubTask - A wrapper around a single command.
+
+        SubTask is useful to wrap a command and trace the progress based on the size
+        of the output file.
 
         Args:
             title: Human readable title for this command.
